@@ -2796,7 +2796,7 @@ NSMutableArray* screens=0;
         if ([unmodkeystr length] != 0) {
             unichar unmodunicode = [unmodkeystr length] > 0 ? [unmodkeystr characterAtIndex:0] : 0;
             unichar cc = 0xffff;
-            if (unmodunicode >= 'a' && unmodunicode <= 'z') {
+            if (unmodunicode != 'j' && unmodunicode >= 'a' && unmodunicode <= 'z') {
                 cc = unmodunicode - 'a' + 1;
             } else if (unmodunicode == ' ' || unmodunicode == '2' || unmodunicode == '@') {
                 cc = 0;
@@ -2824,6 +2824,7 @@ NSMutableArray* screens=0;
     if (!workAroundControlBug) {
         // Let the IME process key events
         IM_INPUT_INSERT = NO;
+        doCommandBySelectorCalled = NO;
         if (debugKeyDown) {
             NSLog(@"PTYTextView keyDown send to IME");
         }
@@ -2832,6 +2833,7 @@ NSMutableArray* screens=0;
         // If the IME didn't want it, pass it on to the delegate
         if (!prev &&
             !IM_INPUT_INSERT &&
+            doCommandBySelectorCalled &&
             ![self hasMarkedText]) {
             if (debugKeyDown) {
                 NSLog(@"PTYTextView keyDown IME no, send to delegate");
@@ -5684,6 +5686,9 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     // key bindings make Enter send insertNewline:, which does the wrong thing when called on our
     // delegate (it sends 0xa instead of 0xd). TODO: Find a list of useful selectors that could be
     // whitelisted here.
+    //NSLog(@"doCommandBySelector:%@", NSStringFromSelector(aSelector));
+
+    doCommandBySelectorCalled = YES;
 }
 
 - (void)insertText:(id)aString
