@@ -2892,6 +2892,7 @@ static float versionNumber;
     [backgroundImage setState:[imageFilename length] > 0 ? NSOnState : NSOffState];
     [backgroundImagePreview setImage:[[[NSImage alloc] initByReferencingFile:imageFilename] autorelease]];
     backgroundImageFilename = imageFilename;
+    [backgroundImageTiled setState:[[dict objectForKey:KEY_BACKGROUND_IMAGE_TILED] boolValue] ? NSOnState : NSOffState];
 
     // Terminal tab
     [disableWindowResizing setState:[[dict objectForKey:KEY_DISABLE_WINDOW_RESIZING] boolValue] ? NSOnState : NSOffState];
@@ -3313,8 +3314,8 @@ static float versionNumber;
 
     if (sender == backgroundImage) {
         NSString* filename = nil;
-                if ([sender state] == NSOnState) {
-                        filename = [self _chooseBackgroundImage];
+        if ([sender state] == NSOnState) {
+            filename = [self _chooseBackgroundImage];
         }
         if (!filename) {
                         [backgroundImagePreview setImage: nil];
@@ -3323,6 +3324,7 @@ static float versionNumber;
         backgroundImageFilename = filename;
     }
     [newDict setObject:backgroundImageFilename forKey:KEY_BACKGROUND_IMAGE_LOCATION];
+    [newDict setObject:[NSNumber numberWithBool:([backgroundImageTiled state]==NSOnState)] forKey:KEY_BACKGROUND_IMAGE_TILED];
 
     // Terminal tab
     [newDict setObject:[NSNumber numberWithBool:([disableWindowResizing state]==NSOnState)] forKey:KEY_DISABLE_WINDOW_RESIZING];
@@ -4305,6 +4307,7 @@ static float versionNumber;
         KEY_BLUR_RADIUS,
         KEY_BLUR,
         KEY_BACKGROUND_IMAGE_LOCATION,
+        KEY_BACKGROUND_IMAGE_TILED,
         KEY_SYNC_TITLE,
         KEY_DISABLE_WINDOW_RESIZING,
         KEY_HIDE_AFTER_OPENING,
