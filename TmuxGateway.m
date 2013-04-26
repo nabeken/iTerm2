@@ -12,14 +12,13 @@
 #import "NSStringITerm.h"
 
 NSString * const kTmuxGatewayErrorDomain = @"kTmuxGatewayErrorDomain";;
-// Command may fail with an error and selector is still run but with nil output.
 const int kTmuxGatewayCommandShouldTolerateErrors = (1 << 0);
-// Send NSData, not NSString, for output (allowing busted/partial utf-8 sequences).
 const int kTmuxGatewayCommandWantsData = (1 << 1);
+const int kTmuxGatewayCommandHasEndGuardBug = (1 << 2);
 
 #define NEWLINE @"\r"
 
-#define TMUX_VERBOSE_LOGGING
+//#define TMUX_VERBOSE_LOGGING
 #ifdef TMUX_VERBOSE_LOGGING
 #define TmuxLog NSLog
 #else
@@ -249,14 +248,49 @@ error:
   state_ = CONTROL_STATE_DETACHED;
 }
 
+// Accessors for objects in the current-command dictionary.
+- (id)objectConvertingNullInDictionary:(NSDictionary *)dict forKey:(id)key {
+    id object = [dict objectForKey:key];
+    if ([object isKindOfClass:[NSNull class]]) {
+        return nil;
+    } else {
+        return object;
+    }
+}
+
+- (id)currentCommandTarget {
+    return [self objectConvertingNullInDictionary:currentCommand_
+                                           forKey:kCommandTarget];
+}
+
+- (SEL)currentCommandSelector {
+    NSString *theString = [self objectConvertingNullInDictionary:currentCommand_
+                                                          forKey:kCommandSelector];
+    if (theString) {
+        return NSSelectorFromString(theString);
+    } else {
+        return nil;
+    }
+}
+
+- (id)currentCommandObject {
+    return [self objectConvertingNullInDictionary:currentCommand_
+                                           forKey:kCommandObject];
+}
+
+- (int)currentCommandFlags {
+    return [[self objectConvertingNullInDictionary:currentCommand_
+                                            forKey:kCommandFlags] intValue];
+}
+
 - (void)currentCommandResponseFinishedWithError:(BOOL)withError
 {
-    id target = [currentCommand_ objectForKey:kCommandTarget];
+    id target = [self currentCommandTarget];
     if (target) {
-        SEL selector = NSSelectorFromString([currentCommand_ objectForKey:kCommandSelector]);
-        id obj = [currentCommand_ objectForKey:kCommandObject];;
+        SEL selector = [self currentCommandSelector];
+        id obj = [self currentCommandObject];
         if (withError) {
-            if ([[currentCommand_ objectForKey:kCommandFlags] intValue] & kTmuxGatewayCommandShouldTolerateErrors) {
+            if ([self currentCommandFlags] & kTmuxGatewayCommandShouldTolerateErrors) {
                 [target performSelector:selector
                              withObject:nil
                              withObject:obj];
@@ -265,7 +299,7 @@ error:
                 return;
             }
         } else {
-            if ([[currentCommand_ objectForKey:kCommandFlags] intValue] & kTmuxGatewayCommandWantsData) {
+            if ([self currentCommandFlags] & kTmuxGatewayCommandWantsData) {
                 [target performSelector:selector
                              withObject:currentCommandData_
                              withObject:obj];
@@ -289,20 +323,36 @@ error:
 
 - (void)parseBegin:(NSString *)command
 {
-    currentCommand_ = [[commandQueue_ objectAtIndex:0] retain];
-    NSArray *components = [command captureComponentsMatchedByRegex:@"^%begin ([0-9 ]+)$"];
-    if (components.count != 2) {
-        [self abortWithErrorMessage:[NSString stringWithFormat:@"Malformed command (expected %%begin command_id): \"%@\"", command]];
-        return;
+    if ([command hasPrefix:@"%begin auto"]) {
+        NSArray *components = [command captureComponentsMatchedByRegex:@"^%begin auto ([0-9 ]+)$"];
+        if (components.count != 2) {
+            [self abortWithErrorMessage:[NSString stringWithFormat:@"Malformed command (expected %%begin command_id): \"%@\"", command]];
+            return;
+        }
+        TmuxLog(@"Begin auto response");
+        currentCommand_ = [[NSMutableDictionary dictionaryWithObjectsAndKeys:
+                               [components objectAtIndex:1], kCommandId,
+                               nil] retain];
+        [currentCommandResponse_ release];
+        [currentCommandData_ release];
+        currentCommandResponse_ = [[NSMutableString alloc] init];
+        currentCommandData_ = [[NSMutableData alloc] init];
+    } else {
+        currentCommand_ = [[commandQueue_ objectAtIndex:0] retain];
+        NSArray *components = [command captureComponentsMatchedByRegex:@"^%begin ([0-9 ]+)$"];
+        if (components.count != 2) {
+            [self abortWithErrorMessage:[NSString stringWithFormat:@"Malformed command (expected %%begin command_id): \"%@\"", command]];
+            return;
+        }
+        NSString *commandId = [components objectAtIndex:1];
+        [currentCommand_ setObject:commandId forKey:kCommandId];
+        TmuxLog(@"Begin response to %@", [currentCommand_ objectForKey:kCommandString]);
+        [currentCommandResponse_ release];
+        [currentCommandData_ release];
+        currentCommandResponse_ = [[NSMutableString alloc] init];
+        currentCommandData_ = [[NSMutableData alloc] init];
+        [commandQueue_ removeObjectAtIndex:0];
     }
-    NSString *commandId = [components objectAtIndex:1];
-    [currentCommand_ setObject:commandId forKey:kCommandId];
-    TmuxLog(@"Begin response to %@", [currentCommand_ objectForKey:kCommandString]);
-    [currentCommandResponse_ release];
-    [currentCommandData_ release];
-    currentCommandResponse_ = [[NSMutableString alloc] init];
-    currentCommandData_ = [[NSMutableData alloc] init];
-    [commandQueue_ removeObjectAtIndex:0];
 }
 
 - (void)stripLastNewline {
@@ -368,6 +418,20 @@ error:
     }
     // Advance range to include newline so we can chop it off
     commandRange.length += newlineRange.length;
+
+    // Work around a bug in tmux 1.8: if unlink-window causes the current
+    // session to be destroyed, no end guard is printed but %exit may be
+    // received.
+    int flags = [self currentCommandFlags];
+    if (currentCommand_ &&
+        (flags & kTmuxGatewayCommandHasEndGuardBug) &&
+        ([command hasPrefix:@"%exit "] ||
+         [command isEqualToString:@"%exit"])) {
+      // Work around the bug by ending the command so the %exit can be
+      // handled normally.
+      [self stripLastNewline];
+      [self currentCommandResponseFinishedWithError:NO];
+    }
 
     NSString *endCommand = [NSString stringWithFormat:@"%%end %@", [currentCommand_ objectForKey:kCommandId]];
     NSString *errorCommand = [NSString stringWithFormat:@"%%error %@", [currentCommand_ objectForKey:kCommandId]];
@@ -506,9 +570,9 @@ error:
 {
     return [NSDictionary dictionaryWithObjectsAndKeys:
             command, kCommandString,
-            target, kCommandTarget,
-            NSStringFromSelector(selector), kCommandSelector,
-            obj, kCommandObject,
+            target ? target : [NSNull null], kCommandTarget,
+            selector ? (id) NSStringFromSelector(selector) : (id) [NSNull null], kCommandSelector,
+            obj ? obj : [NSNull null], kCommandObject,
             [NSNumber numberWithInt:flags], kCommandFlags,
             nil];
 }
